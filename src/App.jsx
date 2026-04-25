@@ -629,19 +629,38 @@ function FloatingInput({ label, value, onChange, type = "text" }) {
   );
 }
 
-function FloatingSelect({ label, value, onChange, options }) {
+// function FloatingSelect({ label, value, onChange, options }) {
+//   return (
+//     <div className="relative">
+//       <select
+//         value={value}
+//         onChange={onChange}
+//         className="w-full rounded-xl border border-slate-200 bg-white px-3 pb-2 pt-5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+//       >
+//         {options.map((option) => (
+//           <option key={option} value={option}>{option}</option>
+//         ))}
+//       </select>
+//       <label className="absolute left-3 top-1 text-xs text-slate-500">{label}</label>
+//     </div>
+//   );
+// }
+
+function SimpleSelect({ label, value, onChange, options }) {
   return (
-    <div className="relative">
+    <div>
+      <label className="mb-1 block text-xs font-semibold text-slate-500">
+        {label}
+      </label>
       <select
         value={value}
         onChange={onChange}
-        className="w-full rounded-xl border border-slate-200 bg-white px-3 pb-2 pt-5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
       >
         {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
+          <option key={option}>{option}</option>
         ))}
       </select>
-      <label className="absolute left-3 top-1 text-xs text-slate-500">{label}</label>
     </div>
   );
 }
