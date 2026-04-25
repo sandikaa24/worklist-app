@@ -324,7 +324,7 @@ export default function App() {
 
           <FloatingInput
             type="date"
-            label="Due Date"
+            label="Deadline"
             value={form.due_date}
             onChange={(e) => setForm({ ...form, due_date: e.target.value })}
           />
@@ -372,7 +372,7 @@ export default function App() {
                 <Filter className="h-4 w-4" /> Filters
               </button>
               <button className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold hover:bg-slate-50">
-                <SlidersHorizontal className="h-4 w-4" /> Sort: Due Date
+                <SlidersHorizontal className="h-4 w-4" /> Sort: Deadline
               </button>
             </div>
           </div>
@@ -405,7 +405,7 @@ export default function App() {
                       <th className="px-5 py-4">Owner</th>
                       <th className="px-5 py-4">Priority</th>
                       <th className="px-5 py-4">Status</th>
-                      <th className="px-5 py-4">Due Date</th>
+                      <th className="px-5 py-4">Deadline</th>
                       <th className="px-5 py-4">Category</th>
                       <th className="px-5 py-4 text-right">Actions</th>
                     </tr>
@@ -586,7 +586,7 @@ function EditModal({ item, setItem, saving, onSave, onCancel }) {
           />
           <FloatingInput
             type="date"
-            label="Due Date"
+            label="Deadline"
             value={item.due_date || ""}
             onChange={(e) => setItem({ ...item, due_date: e.target.value })}
           />
