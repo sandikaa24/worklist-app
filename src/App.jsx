@@ -17,9 +17,9 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const statuses = ["To Do", "In Progress", "Blocked", "Done"];
+const statuses = ["In Progress", "Waiting", "Done","Not Started", "Blocked"];
 const priorities = ["Low", "Medium", "High", "Urgent"];
-const categories = ["Finance", "Legal", "HR", "Operations", "Product"];
+const categories = ["IGD", "POLI", "REKAM MEDIS", "RAWAT INAP", "LABORATORIUM", "RADIOLOGI", "FARMASI", "GIZI", "CASEMIX", "KEUANGAN", "HEMODIALISA", "KAMAR OPERASI", "LAINNYA"];
 const tabs = ["All Items", ...statuses];
 
 function emptyForm() {
@@ -29,7 +29,7 @@ function emptyForm() {
     priority: "High",
     status: "To Do",
     due_date: "",
-    category: "Finance",
+    category: "IGD",
   };
 }
 
