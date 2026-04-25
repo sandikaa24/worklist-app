@@ -258,7 +258,7 @@ export default function App() {
         <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-3xl font-black text-slate-950 sm:text-4xl">Worklist</h1>
-            <p className="text-sm text-slate-500 sm:text-base">Manage your work items efficiently</p>
+            <p className="text-sm text-slate-500 sm:text-base">Monitoring Project System</p>
             
           </div>
 
