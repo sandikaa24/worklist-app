@@ -1,33 +1,65 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   AlertCircle,
+  ArrowDownAZ,
+  CalendarClock,
   CheckCircle2,
+  ChevronDown,
+  CircleDashed,
+  Clock3,
+  Columns3,
   Filter,
-  MoreVertical,
+  Flame,
+  LayoutList,
+  Loader2,
+  Moon,
   Pencil,
+  Plus,
   Search,
-  SlidersHorizontal,
+  ShieldAlert,
+  Sparkles,
+  Sun,
   Trash2,
+  UserRound,
   X,
 } from "lucide-react";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const statuses = ["In Progress", "Waiting", "Done","Not Started", "Blocked"];
-const priorities = ["Low", "Medium", "High", "Urgent"];
-const categories = ["IGD", "POLI", "REKAM MEDIS", "RAWAT INAP", "LABORATORIUM", "RADIOLOGI", "FARMASI", "GIZI", "CASEMIX", "KEUANGAN", "HEMODIALISA", "KAMAR OPERASI", "LAINNYA"];
-const tabs = ["All Items", ...statuses];
+const STATUS_OPTIONS = ["Not Started", "In Progress", "Waiting", "Blocked", "Done"];
+const PRIORITY_OPTIONS = ["Low", "Medium", "High", "Urgent"];
+const CATEGORY_OPTIONS = [
+  "IGD",
+  "POLI",
+  "REKAM MEDIS",
+  "RAWAT INAP",
+  "LABORATORIUM",
+  "RADIOLOGI",
+  "FARMASI",
+  "GIZI",
+  "CASEMIX",
+  "KEUANGAN",
+  "HEMODIALISA",
+  "KAMAR OPERASI",
+  "LAINNYA",
+];
+
+const DEFAULT_FILTERS = {
+  priority: "All",
+  status: "All",
+  category: "All",
+  sort: "deadline",
+};
 
 function emptyForm() {
   return {
     title: "",
     owner: "",
     priority: "High",
-    status: "To Do",
+    status: "Not Started",
     due_date: "",
     category: "IGD",
   };
@@ -41,8 +73,22 @@ export default function App() {
   const [form, setForm] = useState(emptyForm());
   const [editingItem, setEditingItem] = useState(null);
   const [query, setQuery] = useState("");
-  const [activeTab, setActiveTab] = useState("All Items");
+  const [activeTab, setActiveTab] = useState("All");
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [viewMode, setViewMode] = useState("table");
+  const [darkMode, setDarkMode] = useState(() => {
+    const savedTheme = localStorage.getItem("worklist-theme");
+    if (savedTheme) return savedTheme === "dark";
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+  });
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+    localStorage.setItem("worklist-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
   useEffect(() => {
     loadItems();
@@ -51,20 +97,12 @@ export default function App() {
       .channel("work_items_changes")
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "work_items",
-        },
-        () => {
-          loadItems(false);
-        }
+        { event: "*", schema: "public", table: "work_items" },
+        () => loadItems(false)
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => supabase.removeChannel(channel);
   }, []);
 
   async function loadItems(showLoader = true) {
@@ -87,10 +125,13 @@ export default function App() {
     if (showLoader) setLoading(false);
   }
 
+  const stats = useMemo(() => buildStats(items), [items]);
+  const tabs = useMemo(() => ["All", ...STATUS_OPTIONS], []);
+
   const filteredItems = useMemo(() => {
     const keyword = query.trim().toLowerCase();
 
-    return items.filter((item) => {
+    const result = items.filter((item) => {
       const searchable = [
         item.title,
         item.owner,
@@ -104,49 +145,34 @@ export default function App() {
         .toLowerCase();
 
       const matchSearch = !keyword || searchable.includes(keyword);
-      const matchTab = activeTab === "All Items" || item.status === activeTab;
+      const matchTab = activeTab === "All" || item.status === activeTab;
+      const matchPriority = filters.priority === "All" || item.priority === filters.priority;
+      const matchStatus = filters.status === "All" || item.status === filters.status;
+      const matchCategory = filters.category === "All" || item.category === filters.category;
 
-      return matchSearch && matchTab;
+      return matchSearch && matchTab && matchPriority && matchStatus && matchCategory;
     });
-  }, [items, query, activeTab]);
 
-  const stats = useMemo(() => {
-    return items.reduce(
-      (acc, item) => {
-        acc.total += 1;
-        if (item.status === "Done") acc.done += 1;
-        if (item.status === "In Progress") acc.progress += 1;
-        if (item.status === "Blocked") acc.blocked += 1;
-        if (item.priority === "High" || item.priority === "Urgent") acc.urgent += 1;
-        return acc;
-      },
-      { total: 0, done: 0, progress: 0, blocked: 0, urgent: 0 }
-    );
-  }, [items]);
+    return [...result].sort((a, b) => sortItems(a, b, filters.sort));
+  }, [items, query, activeTab, filters]);
+
+  const groupedItems = useMemo(() => {
+    return STATUS_OPTIONS.reduce((acc, status) => {
+      acc[status] = filteredItems.filter((item) => item.status === status);
+      return acc;
+    }, {});
+  }, [filteredItems]);
 
   async function addItem(e) {
     e.preventDefault();
 
-    const payload = {
-      ...form,
-      title: form.title.trim(),
-      owner: form.owner.trim(),
-      due_date: form.due_date || null,
-    };
-
-    if (!payload.title) {
-      setErrorMessage("Title wajib diisi.");
-      return;
-    }
+    const payload = sanitizeItem(form);
+    if (!payload.title) return setErrorMessage("Title wajib diisi.");
 
     setSaving(true);
     setErrorMessage("");
 
-    const { data, error } = await supabase
-      .from("work_items")
-      .insert([payload])
-      .select()
-      .single();
+    const { data, error } = await supabase.from("work_items").insert([payload]).select().single();
 
     if (error) {
       console.error(error.message);
@@ -154,12 +180,16 @@ export default function App() {
     } else {
       setItems((current) => [data, ...current]);
       setForm(emptyForm());
+      setShowCreateModal(false);
     }
 
     setSaving(false);
   }
 
   async function removeItem(id) {
+    const confirmed = window.confirm("Hapus item ini?");
+    if (!confirmed) return;
+
     const previousItems = items;
     setProcessingId(id);
     setErrorMessage("");
@@ -176,22 +206,13 @@ export default function App() {
     setProcessingId(null);
   }
 
-  async function markDone(id) {
-    await updateItemStatus(id, "Done");
-  }
-
   async function updateItemStatus(id, status) {
     const previousItems = items;
     setProcessingId(id);
     setErrorMessage("");
-    setItems((current) =>
-      current.map((item) => (item.id === id ? { ...item, status } : item))
-    );
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, status } : item)));
 
-    const { error } = await supabase
-      .from("work_items")
-      .update({ status })
-      .eq("id", id);
+    const { error } = await supabase.from("work_items").update({ status }).eq("id", id);
 
     if (error) {
       console.error(error.message);
@@ -202,44 +223,19 @@ export default function App() {
     setProcessingId(null);
   }
 
-  function startEdit(item) {
-    setEditingItem({ ...item, due_date: item.due_date || "" });
-  }
-
-  function cancelEdit() {
-    setEditingItem(null);
-  }
-
   async function saveEdit(e) {
     e.preventDefault();
 
-    if (!editingItem?.title?.trim()) {
-      setErrorMessage("Title wajib diisi.");
-      return;
-    }
+    if (!editingItem?.title?.trim()) return setErrorMessage("Title wajib diisi.");
 
-    const payload = {
-      title: editingItem.title.trim(),
-      owner: editingItem.owner?.trim() || "",
-      priority: editingItem.priority,
-      status: editingItem.status,
-      due_date: editingItem.due_date || null,
-      category: editingItem.category,
-    };
-
+    const payload = sanitizeItem(editingItem);
     const previousItems = items;
+
     setProcessingId(editingItem.id);
     setErrorMessage("");
-    setItems((current) =>
-      current.map((item) =>
-        item.id === editingItem.id ? { ...item, ...payload } : item
-      )
-    );
+    setItems((current) => current.map((item) => (item.id === editingItem.id ? { ...item, ...payload } : item)));
 
-    const { error } = await supabase
-      .from("work_items")
-      .update(payload)
-      .eq("id", editingItem.id);
+    const { error } = await supabase.from("work_items").update(payload).eq("id", editingItem.id);
 
     if (error) {
       console.error(error.message);
@@ -253,134 +249,53 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 p-3 sm:p-6">
-      <div className="mx-auto max-w-7xl space-y-5 sm:space-y-6">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-3xl font-black text-slate-950 sm:text-4xl">Worklist</h1>
-            <p className="text-sm text-slate-500 sm:text-base">Monitoring Project System</p>
-            
-          </div>
-
-          <div className="relative w-full sm:w-80">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-              placeholder="Search title, owner, status..."
-            />
-          </div>
-        </header>
-
-        {errorMessage && (
-          <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{errorMessage}</span>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 md:gap-4">
-          <Stat title="Total" value={stats.total} />
-          <Stat title="Done" value={stats.done} />
-          <Stat title="Progress" value={stats.progress} />
-          <Stat title="Blocked" value={stats.blocked} />
-          <Stat title="Urgent" value={stats.urgent} />
-        </div>
-
-        <form onSubmit={addItem} className="grid gap-3 rounded-2xl bg-white p-4 shadow sm:grid-cols-2 lg:grid-cols-7">
-          <FloatingInput
-            label="Title"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
+    <div className="min-h-screen bg-slate-100 text-slate-950 transition-colors dark:bg-slate-950 dark:text-white">
+      <main className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+          <HeroHeader
+            query={query}
+            setQuery={setQuery}
+            viewMode={viewMode}
+            setViewMode={setViewMode}
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
+            onCreate={() => setShowCreateModal(true)}
           />
 
-          <FloatingInput
-            label="Owner"
-            value={form.owner}
-            onChange={(e) => setForm({ ...form, owner: e.target.value })}
+        {errorMessage && <ErrorBanner message={errorMessage} />}
+
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <StatCard title="Total" value={stats.total} icon={CircleDashed} tone="slate" />
+          <StatCard title="Done" value={stats.done} icon={CheckCircle2} tone="emerald" />
+          <StatCard title="Progress" value={stats.progress} icon={Clock3} tone="indigo" />
+          <StatCard title="Blocked" value={stats.blocked} icon={ShieldAlert} tone="red" />
+          <StatCard title="Urgent" value={stats.urgent} icon={Flame} tone="violet" />
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900">
+          <Toolbar
+            tabs={tabs}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            items={items}
+            filters={filters}
+            setFilters={setFilters}
+            showFilters={showFilters}
+            setShowFilters={setShowFilters}
           />
-
-          <FloatingSelect
-            label="Priority"
-            value={form.priority}
-            options={priorities}
-            onChange={(e) => setForm({ ...form, priority: e.target.value })}
-          />
-
-          <FloatingSelect
-            label="Status"
-            value={form.status}
-            options={statuses}
-            onChange={(e) => setForm({ ...form, status: e.target.value })}
-          />
-
-          <FloatingSelect
-            label="Category"
-            value={form.category}
-            options={categories}
-            onChange={(e) => setForm({ ...form, category: e.target.value })}
-          />
-
-          <FloatingInput
-            type="date"
-            label="Deadline"
-            value={form.due_date}
-            onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-          />
-
-          <div className="flex items-end sm:col-span-2 lg:col-span-1">
-            <button
-              disabled={saving}
-              className="h-11 w-full rounded-xl bg-violet-600 px-4 font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {saving ? "Adding..." : "Add"}
-            </button>
-          </div>
-        </form>
-
-        {editingItem && (
-          <EditModal
-            item={editingItem}
-            setItem={setEditingItem}
-            saving={processingId === editingItem.id}
-            onSave={saveEdit}
-            onCancel={cancelEdit}
-          />
-        )}
-
-        <section className="overflow-hidden rounded-2xl bg-white shadow">
-          <div className="flex flex-col gap-4 border-b border-slate-200 p-4 lg:flex-row lg:items-center lg:justify-between lg:p-5">
-            <div className="flex gap-3 overflow-x-auto text-sm font-bold text-slate-500 sm:flex-wrap sm:gap-5">
-              {tabs.map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`shrink-0 border-b-2 pb-3 transition ${
-                    activeTab === tab
-                      ? "border-violet-600 text-violet-600"
-                      : "border-transparent hover:text-slate-900"
-                  }`}
-                >
-                  {tab} ({tab === "All Items" ? items.length : items.filter((item) => item.status === tab).length})
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-2 overflow-x-auto">
-              <button className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold hover:bg-slate-50">
-                <Filter className="h-4 w-4" /> Filters
-              </button>
-              <button className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold hover:bg-slate-50">
-                <SlidersHorizontal className="h-4 w-4" /> Sort: Deadline
-              </button>
-            </div>
-          </div>
 
           {loading ? (
-            <p className="p-6 font-semibold text-slate-500">Loading...</p>
+            <LoadingState />
           ) : filteredItems.length === 0 ? (
-            <p className="p-6 text-center font-semibold text-slate-500">No items found.</p>
+            <EmptyState onCreate={() => setShowCreateModal(true)} />
+          ) : viewMode === "kanban" ? (
+            <KanbanBoard
+              groupedItems={groupedItems}
+              processingId={processingId}
+              onDone={(id) => updateItemStatus(id, "Done")}
+              onDelete={removeItem}
+              onEdit={(item) => setEditingItem({ ...item, due_date: item.due_date || "" })}
+              onStatusChange={updateItemStatus}
+            />
           ) : (
             <>
               <div className="divide-y divide-slate-100 md:hidden">
@@ -389,87 +304,247 @@ export default function App() {
                     key={item.id}
                     item={item}
                     processingId={processingId}
-                    onDone={markDone}
+                    onDone={(id) => updateItemStatus(id, "Done")}
                     onDelete={removeItem}
-                    onEdit={startEdit}
+                    onEdit={(item) => setEditingItem({ ...item, due_date: item.due_date || "" })}
                     onStatusChange={updateItemStatus}
                   />
                 ))}
               </div>
 
-              <div className="hidden overflow-x-auto md:block">
-                <table className="w-full min-w-[980px] text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-500">
-                    <tr>
-                      <th className="px-5 py-4">Title</th>
-                      <th className="px-5 py-4">Owner</th>
-                      <th className="px-5 py-4">Priority</th>
-                      <th className="px-5 py-4">Status</th>
-                      <th className="px-5 py-4">Deadline</th>
-                      <th className="px-5 py-4">Category</th>
-                      <th className="px-5 py-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredItems.map((item) => (
-                      <tr key={item.id} className="transition hover:bg-slate-50/80">
-                        <td className="px-5 py-4 font-black text-slate-900">{item.title}</td>
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-2 font-medium text-slate-700">
-                            <span className="grid h-8 w-8 place-items-center rounded-full bg-cyan-100 text-xs font-black text-cyan-700">
-                              {initials(item.owner)}
-                            </span>
-                            {item.owner || "Unassigned"}
-                          </div>
-                        </td>
-                        <td className="px-5 py-4"><Badge type="priority" value={item.priority} /></td>
-                        <td className="px-5 py-4"><Badge type="status" value={item.status} /></td>
-                        <td className="px-5 py-4 font-semibold text-slate-700">{formatDate(item.due_date)}</td>
-                        <td className="px-5 py-4"><Badge type="category" value={item.category} /></td>
-                        <td className="px-5 py-4">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              disabled={processingId === item.id || item.status === "Done"}
-                              onClick={() => markDone(item.id)}
-                              className="rounded-xl p-2 text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
-                              title="Mark as done"
-                            >
-                              <CheckCircle2 className="h-5 w-5" />
-                            </button>
-                            <button
-                              disabled={processingId === item.id}
-                              onClick={() => removeItem(item.id)}
-                              className="rounded-xl p-2 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                              title="Delete"
-                            >
-                              <Trash2 className="h-5 w-5" />
-                            </button>
-                            <button
-                              onClick={() => startEdit(item)}
-                              className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"
-                              title="Edit"
-                            >
-                              <Pencil className="h-5 w-5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <DesktopTable
+                items={filteredItems}
+                processingId={processingId}
+                onDone={(id) => updateItemStatus(id, "Done")}
+                onDelete={removeItem}
+                onEdit={(item) => setEditingItem({ ...item, due_date: item.due_date || "" })}
+                onStatusChange={updateItemStatus}
+              />
             </>
           )}
 
-          <div className="flex flex-col gap-3 border-t border-slate-200 p-4 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-            <span>Showing {filteredItems.length} of {items.length} items</span>
-            <div className="flex flex-col items-end gap-1">
-              <span className="font-semibold text-slate-400">Realtime enabled</span>
-              <span className="text-xs font-semibold uppercase tracking-wide text-violet-600">Author by Sandika</span>
-            </div>
-          </div>
+          <Footer filteredCount={filteredItems.length} totalCount={items.length} />
         </section>
+      </main>
+
+      {showCreateModal && (
+        <ItemModal
+          title="Tambah Work Item"
+          subtitle="Buat task baru tanpa mengganggu daftar utama."
+          item={form}
+          setItem={setForm}
+          saving={saving}
+          onSave={addItem}
+          onCancel={() => setShowCreateModal(false)}
+          submitText="Add Item"
+          loadingText="Adding..."
+        />
+      )}
+
+      {editingItem && (
+          <ItemModal
+          title="Edit Item"
+          subtitle="Update detail project monitoring."
+          item={editingItem}
+          setItem={setEditingItem}
+          saving={processingId === editingItem.id}
+          onSave={saveEdit}
+          onCancel={() => setEditingItem(null)}
+          submitText="Save Changes"
+          loadingText="Saving..."
+        />
+      )}
+    </div>
+  );
+}
+
+function HeroHeader({ query, setQuery, viewMode, setViewMode, darkMode, setDarkMode, onCreate }) {
+  return (
+    <header className="overflow-hidden rounded-3xl bg-slate-950 p-5 text-white shadow-xl sm:p-7">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-bold text-violet-100">
+            <Sparkles className="h-3.5 w-3.5" /> Realtime Project Monitoring
+          </div>
+          <h1 className="text-4xl font-black tracking-tight sm:text-5xl">Worklist</h1>
+          <p className="mt-2 max-w-xl text-sm text-slate-300 sm:text-base">
+            Pantau pekerjaan, prioritas, deadline, dan status antar unit dalam satu dashboard.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative w-full sm:w-80">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-white/10 py-3 pl-9 pr-3 text-sm text-white outline-none placeholder:text-slate-400 focus:border-violet-300 focus:ring-2 focus:ring-violet-400/30"
+              placeholder="Search title, owner, status..."
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => setDarkMode((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/15"
+              title="Toggle dark mode"
+            >
+              {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {darkMode ? "Light" : "Dark"}
+            </button>
+            <button
+              onClick={() => setViewMode(viewMode === "table" ? "kanban" : "table")}
+              className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/15"
+            >
+              {viewMode === "table" ? <Columns3 className="h-4 w-4" /> : <LayoutList className="h-4 w-4" />}
+              {viewMode === "table" ? "Kanban" : "Table"}
+            </button>
+            <button
+              onClick={onCreate}
+              className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-violet-950/30 transition hover:bg-violet-400"
+            >
+              <Plus className="h-4 w-4" /> Add
+            </button>
+          </div>
+        </div>
       </div>
+    </header>
+  );
+}
+
+function Toolbar({ tabs, activeTab, setActiveTab, items, filters, setFilters, showFilters, setShowFilters }) {
+  return (
+    <div className="border-b border-slate-200 dark:border-slate-800">
+      <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between lg:p-5">
+        <div className="flex gap-3 overflow-x-auto text-sm font-bold text-slate-500 sm:flex-wrap sm:gap-5">
+          {tabs.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`shrink-0 border-b-2 pb-3 transition ${
+                activeTab === tab ? "border-violet-600 text-violet-600 dark:border-violet-400 dark:text-violet-300" : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+              }`}
+            >
+              {tab} ({tab === "All" ? items.length : items.filter((item) => item.status === tab).length})
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setShowFilters((value) => !value)}
+            className="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-900 hover:bg-slate-50 dark:border-slate-700 dark:text-white dark:hover:bg-slate-800"
+          >
+            <Filter className="h-4 w-4" /> Filters
+          </button>
+          <SelectPill
+            icon={ArrowDownAZ}
+            value={filters.sort}
+            onChange={(value) => setFilters((current) => ({ ...current, sort: value }))}
+            options={[
+              ["deadline", "Deadline"],
+              ["priority", "Priority"],
+              ["newest", "Newest"],
+              ["title", "Title"],
+            ]}
+          />
+        </div>
+      </div>
+
+      {showFilters && (
+        <div className="grid gap-3 border-t border-slate-100 bg-slate-50/70 p-4 transition-colors dark:border-slate-800 dark:bg-slate-900/70 sm:grid-cols-3 lg:p-5">
+          <MiniSelect label="Priority" value={filters.priority} options={["All", ...PRIORITY_OPTIONS]} onChange={(priority) => setFilters((current) => ({ ...current, priority }))} />
+          <MiniSelect label="Status" value={filters.status} options={["All", ...STATUS_OPTIONS]} onChange={(status) => setFilters((current) => ({ ...current, status }))} />
+          <MiniSelect label="Category" value={filters.category} options={["All", ...CATEGORY_OPTIONS]} onChange={(category) => setFilters((current) => ({ ...current, category }))} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DesktopTable({ items, processingId, onDone, onDelete, onEdit, onStatusChange }) {
+  return (
+    <div className="hidden overflow-x-auto md:block">
+      <table className="w-full min-w-[980px] text-left text-sm">
+        <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800 dark:text-slate-300">
+          <tr>
+            <th className="px-5 py-4">Title</th>
+            <th className="px-5 py-4">Owner</th>
+            <th className="px-5 py-4">Priority</th>
+            <th className="px-5 py-4">Status</th>
+            <th className="px-5 py-4">Deadline</th>
+            <th className="px-5 py-4">Category</th>
+            <th className="px-5 py-4 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+          {items.map((item) => (
+            <tr key={item.id} className="group transition hover:bg-violet-50/30 dark:hover:bg-violet-500/10">
+              <td className="px-5 py-4">
+                <div className="max-w-xs truncate font-black text-slate-900 dark:text-white">{item.title}</div>
+                {isOverdue(item.due_date, item.status) && <p className="mt-1 text-xs font-bold text-red-600">Overdue</p>}
+              </td>
+              <td className="px-5 py-4">
+                <Owner value={item.owner} />
+              </td>
+              <td className="px-5 py-4"><Badge type="priority" value={item.priority} /></td>
+              <td className="px-5 py-4">
+                <CustomSelect
+                  disabled={processingId === item.id}
+                  value={item.status}
+                  options={STATUS_OPTIONS}
+                  onChange={(status) => onStatusChange(item.id, status)}
+                  size="sm"
+                />
+              </td>
+              <td className="px-5 py-4 font-semibold text-slate-700 dark:text-slate-200">{formatDate(item.due_date)}</td>
+              <td className="px-5 py-4"><Badge type="category" value={item.category} /></td>
+              <td className="px-5 py-4">
+                <RowActions item={item} processingId={processingId} onDone={onDone} onDelete={onDelete} onEdit={onEdit} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function KanbanBoard({ groupedItems, processingId, onDone, onDelete, onEdit, onStatusChange }) {
+  return (
+    <div className="grid gap-4 overflow-x-auto bg-white p-4 transition-colors dark:bg-slate-900 md:grid-cols-5 lg:p-5">
+      {STATUS_OPTIONS.map((status) => (
+        <div key={status} className="min-w-[240px] rounded-2xl border border-slate-200 bg-slate-50 p-3 transition-colors dark:border-slate-700 dark:bg-slate-950">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="font-black text-slate-800 dark:text-white">{status}</h3>
+            <span className="rounded-full bg-white px-2 py-1 text-xs font-black text-slate-500 dark:bg-slate-800 dark:text-slate-200">{groupedItems[status]?.length || 0}</span>
+          </div>
+          <div className="space-y-3">
+            {(groupedItems[status] || []).map((item) => (
+              <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700 dark:bg-slate-900">
+                <h4 className="font-black text-slate-900 dark:text-white">{item.title}</h4>
+                <p className="mt-1 flex items-center gap-1 text-xs font-bold text-slate-500 dark:text-slate-300"><UserRound className="h-3.5 w-3.5" /> {item.owner || "Unassigned"}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge type="priority" value={item.priority} />
+                  <Badge type="category" value={item.category} />
+                </div>
+                <p className={`mt-3 flex items-center gap-1 text-xs font-black ${isOverdue(item.due_date, item.status) ? "text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-300"}`}>
+                  <CalendarClock className="h-3.5 w-3.5" /> {formatDate(item.due_date)}
+                </p>
+                <div className="mt-3">
+                  <CustomSelect
+                    disabled={processingId === item.id}
+                    value={item.status}
+                    options={STATUS_OPTIONS}
+                    onChange={(status) => onStatusChange(item.id, status)}
+                  />
+                </div>
+                <RowActions item={item} processingId={processingId} onDone={onDone} onDelete={onDelete} onEdit={onEdit} compact />
+              </article>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -480,134 +555,142 @@ function MobileItemCard({ item, processingId, onDone, onDelete, onEdit, onStatus
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate font-black text-slate-900">{item.title}</h3>
-          <p className="text-sm text-slate-500">{item.owner || "Unassigned"}</p>
+          <Owner value={item.owner} />
         </div>
-
-        <div className="flex shrink-0 gap-1">
-          <button
-            disabled={processingId === item.id || item.status === "Done"}
-            onClick={() => onDone(item.id)}
-            className="rounded-lg p-2 text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Mark as done"
-          >
-            <CheckCircle2 className="h-5 w-5" />
-          </button>
-
-          <button
-            disabled={processingId === item.id}
-            onClick={() => onDelete(item.id)}
-            className="rounded-lg p-2 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Delete"
-          >
-            <Trash2 className="h-5 w-5" />
-          </button>
-
-          <button
-            disabled={processingId === item.id}
-            onClick={() => onEdit(item)}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Edit"
-          >
-            <Pencil className="h-5 w-5" />
-          </button>
-        </div>
+        <RowActions item={item} processingId={processingId} onDone={onDone} onDelete={onDelete} onEdit={onEdit} compact />
       </div>
-
       <div className="flex flex-wrap gap-2">
         <Badge type="priority" value={item.priority} />
         <Badge type="status" value={item.status} />
         <Badge type="category" value={item.category} />
       </div>
-
-      <div className="flex flex-col gap-2 text-sm font-semibold text-slate-600">
-        <p>Due: {formatDate(item.due_date)}</p>
-        <select
-          disabled={processingId === item.id}
-          value={item.status}
-          onChange={(e) => onStatusChange(item.id, e.target.value)}
-          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-        >
-          {statuses.map((status) => (
-            <option key={status} value={status}>{status}</option>
-          ))}
-        </select>
-      </div>
+      <p className={`text-sm font-bold ${isOverdue(item.due_date, item.status) ? "text-red-600" : "text-slate-600"}`}>Due: {formatDate(item.due_date)}</p>
+      <CustomSelect
+        disabled={processingId === item.id}
+        value={item.status}
+        options={STATUS_OPTIONS}
+        onChange={(status) => onStatusChange(item.id, status)}
+      />
     </article>
   );
 }
 
-function EditModal({ item, setItem, saving, onSave, onCancel }) {
+function ItemModal({ title, subtitle, item, setItem, saving, onSave, onCancel, submitText, loadingText }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
-      <form onSubmit={onSave} className="w-full max-w-2xl rounded-2xl bg-white p-4 shadow-2xl sm:p-6">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <form onSubmit={onSave} className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 sm:p-6">
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-2xl font-black text-slate-950">Edit Item</h2>
-            <p className="text-sm text-slate-500">Update work item details.</p>
+            <h2 className="text-2xl font-black text-slate-950 dark:text-white">{title}</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-300">{subtitle}</p>
           </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"
-            title="Close"
-          >
+          <button type="button" onClick={onCancel} className="rounded-2xl p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800" title="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <FloatingInput
-            label="Title"
-            value={item.title || ""}
-            onChange={(e) => setItem({ ...item, title: e.target.value })}
-          />
-          <FloatingInput
-            label="Owner"
-            value={item.owner || ""}
-            onChange={(e) => setItem({ ...item, owner: e.target.value })}
-          />
-          <FloatingSelect
-            label="Priority"
-            value={item.priority || "High"}
-            options={priorities}
-            onChange={(e) => setItem({ ...item, priority: e.target.value })}
-          />
-          <FloatingSelect
-            label="Status"
-            value={item.status || "To Do"}
-            options={statuses}
-            onChange={(e) => setItem({ ...item, status: e.target.value })}
-          />
-          <FloatingSelect
-            label="Category"
-            value={item.category || "Finance"}
-            options={categories}
-            onChange={(e) => setItem({ ...item, category: e.target.value })}
-          />
-          <FloatingInput
-            type="date"
-            label="Deadline"
-            value={item.due_date || ""}
-            onChange={(e) => setItem({ ...item, due_date: e.target.value })}
-          />
+          <FloatingInput label="Title" value={item.title || ""} onChange={(e) => setItem({ ...item, title: e.target.value })} />
+          <FloatingInput label="Owner" value={item.owner || ""} onChange={(e) => setItem({ ...item, owner: e.target.value })} />
+          <FloatingSelect label="Priority" value={item.priority || "High"} options={PRIORITY_OPTIONS} onChange={(e) => setItem({ ...item, priority: e.target.value })} />
+          <FloatingSelect label="Status" value={item.status || "Not Started"} options={STATUS_OPTIONS} onChange={(e) => setItem({ ...item, status: e.target.value })} />
+          <FloatingSelect label="Category" value={item.category || "IGD"} options={CATEGORY_OPTIONS} onChange={(e) => setItem({ ...item, category: e.target.value })} />
+          <FloatingInput type="date" label="Deadline" value={item.due_date || ""} onChange={(e) => setItem({ ...item, due_date: e.target.value })} />
         </div>
 
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-xl border border-slate-200 px-4 py-2 font-bold text-slate-700 hover:bg-slate-50"
-          >
-            Cancel
-          </button>
-          <button
-            disabled={saving}
-            className="rounded-xl bg-violet-600 px-4 py-2 font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? "Saving..." : "Save Changes"}
+          <button type="button" onClick={onCancel} className="rounded-2xl border border-slate-200 px-4 py-2.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+          <button disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-violet-600 px-4 py-2.5 font-black text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60">
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving ? loadingText : submitText}
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function RowActions({ item, processingId, onDone, onDelete, onEdit, compact = false }) {
+  return (
+    <div className={`flex justify-end gap-1 ${compact ? "mt-3" : "opacity-100 transition md:opacity-70 md:group-hover:opacity-100"}`}>
+      <IconButton disabled={processingId === item.id || item.status === "Done"} onClick={() => onDone(item.id)} title="Mark as done" tone="emerald" icon={CheckCircle2} />
+      <IconButton disabled={processingId === item.id} onClick={() => onEdit(item)} title="Edit" tone="slate" icon={Pencil} />
+      <IconButton disabled={processingId === item.id} onClick={() => onDelete(item.id)} title="Delete" tone="red" icon={Trash2} />
+    </div>
+  );
+}
+
+function IconButton({ icon: Icon, tone, ...props }) {
+  const tones = {
+    emerald: "text-emerald-600 hover:bg-emerald-50",
+    red: "text-red-600 hover:bg-red-50",
+    slate: "text-slate-500 hover:bg-slate-100",
+  };
+  return (
+    <button {...props} className={`rounded-xl p-2 transition disabled:cursor-not-allowed disabled:opacity-40 ${tones[tone]}`}>
+      <Icon className="h-5 w-5" />
+    </button>
+  );
+}
+
+function StatCard({ title, value, icon: Icon, tone }) {
+  const tones = {
+    slate: "bg-slate-100 text-slate-700",
+    emerald: "bg-emerald-100 text-emerald-700",
+    indigo: "bg-indigo-100 text-indigo-700",
+    red: "bg-red-100 text-red-700",
+    violet: "bg-violet-100 text-violet-700",
+  };
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-bold text-slate-500 dark:text-slate-300">{title}</p>
+        <span className={`grid h-10 w-10 place-items-center rounded-2xl ${tones[tone]}`}><Icon className="h-5 w-5" /></span>
+      </div>
+      <p className="mt-3 text-3xl font-black text-slate-950 dark:text-white">{value}</p>
+    </div>
+  );
+}
+
+function ErrorBanner({ message }) {
+  return (
+    <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="grid place-items-center p-12 text-slate-500">
+      <Loader2 className="mb-3 h-8 w-8 animate-spin" />
+      <p className="font-bold">Loading work items...</p>
+    </div>
+  );
+}
+
+function EmptyState({ onCreate }) {
+  return (
+    <div className="grid place-items-center p-12 text-center">
+      <div className="grid h-16 w-16 place-items-center rounded-3xl bg-violet-100 text-violet-700">
+        <Plus className="h-7 w-7" />
+      </div>
+      <h3 className="mt-4 text-xl font-black text-slate-900">Belum ada item</h3>
+      <p className="mt-1 max-w-sm text-sm text-slate-500">Tambahkan work item pertama untuk mulai monitoring progress project.</p>
+      <button onClick={onCreate} className="mt-5 rounded-2xl bg-violet-600 px-5 py-3 text-sm font-black text-white hover:bg-violet-700">Add Item</button>
+    </div>
+  );
+}
+
+function Footer({ filteredCount, totalCount }) {
+  return (
+    <div className="flex flex-col gap-3 border-t border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+      <span>Showing {filteredCount} of {totalCount} items</span>
+      <div className="flex flex-col items-start gap-1 sm:items-end">
+        <span className="font-semibold text-emerald-600">Realtime enabled</span>
+        <span className="text-xs font-black uppercase tracking-wide text-violet-600">Author by Sandika</span>
+      </div>
     </div>
   );
 }
@@ -620,9 +703,9 @@ function FloatingInput({ label, value, onChange, type = "text" }) {
         value={value}
         onChange={onChange}
         placeholder=" "
-        className="peer w-full rounded-xl border border-slate-200 px-3 pb-2 pt-5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+        className="peer w-full rounded-2xl border border-slate-200 px-3 pb-2 pt-5 text-sm outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
       />
-      <label className="absolute left-3 top-1 text-xs text-slate-500 transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-sm peer-placeholder-shown:text-slate-400 peer-focus:top-1 peer-focus:text-xs peer-focus:text-violet-600">
+      <label className="absolute left-3 top-1 text-xs text-slate-500 transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-sm peer-placeholder-shown:text-slate-400 peer-focus:top-1 peer-focus:text-xs peer-focus:text-violet-600 dark:text-slate-300 dark:peer-placeholder-shown:text-slate-400 dark:peer-focus:text-violet-300">
         {label}
       </label>
     </div>
@@ -632,27 +715,120 @@ function FloatingInput({ label, value, onChange, type = "text" }) {
 function FloatingSelect({ label, value, onChange, options }) {
   return (
     <div>
-      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
-        {label}
-      </label>
-      <select
-        value={value}
-        onChange={onChange}
-        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
-        ))}
-      </select>
+      <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-300">{label}</label>
+      <CustomSelect value={value} options={options} onChange={(nextValue) => onChange({ target: { value: nextValue } })} />
     </div>
   );
 }
 
-function Stat({ title, value }) {
+function MiniSelect({ label, value, options, onChange }) {
   return (
-    <div className="rounded-2xl bg-white p-4 shadow">
-      <p className="text-sm font-medium text-slate-500">{title}</p>
-      <p className="text-2xl font-black text-slate-950">{value}</p>
+    <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-200">
+      {label}
+      <div className="mt-1">
+        <CustomSelect value={value} options={options} onChange={onChange} fullWidth />
+      </div>
+    </label>
+  );
+}
+
+function SelectPill({ icon: Icon, value, onChange, options }) {
+  return (
+    <CustomSelect
+      value={value}
+      options={options.map(([optionValue, label]) => ({ value: optionValue, label }))}
+      onChange={onChange}
+      size="pill"
+      icon={Icon}
+    />
+  );
+}
+
+function CustomSelect({ value, options, onChange, disabled = false, size = "md", icon: Icon, fullWidth = false }) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef(null);
+
+  const normalizedOptions = options.map((option) =>
+    typeof option === "string" ? { value: option, label: option } : option
+  );
+  const selected = normalizedOptions.find((option) => option.value === value) || normalizedOptions[0];
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+
+    function handleEscape(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
+  const sizeClass =
+    size === "sm"
+      ? "min-w-[145px] rounded-full px-3 py-1.5 text-xs"
+      : size === "pill"
+      ? "min-w-[160px] rounded-2xl px-4 py-2.5 text-sm"
+      : "rounded-2xl px-3 py-3 text-sm";
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        className={`inline-flex ${fullWidth || size === "md" ? "w-full" : ""} items-center justify-between gap-2 border border-slate-200 bg-white font-black text-slate-900 shadow-sm outline-none transition hover:bg-slate-50 focus:border-violet-500 focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:hover:bg-slate-800 ${sizeClass}`}
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          {Icon && <Icon className="h-4 w-4 shrink-0" />}
+          <span className="truncate">{selected?.label || "Select"}</span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-2 max-h-64 min-w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-2xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40">
+          {normalizedOptions.map((option) => {
+            const active = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm font-bold transition ${
+                  active
+                    ? "bg-violet-600 text-white"
+                    : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                }`}
+              >
+                <span className="whitespace-nowrap">{option.label}</span>
+                {active && <CheckCircle2 className="h-4 w-4" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Owner({ value }) {
+  return (
+    <div className="flex items-center gap-2 font-medium text-slate-700 dark:text-slate-200">
+      <span className="grid h-8 w-8 place-items-center rounded-full bg-cyan-100 text-xs font-black text-cyan-700">{initials(value)}</span>
+      <span className="truncate">{value || "Unassigned"}</span>
     </div>
   );
 }
@@ -666,42 +842,74 @@ function Badge({ type, value }) {
       Urgent: "bg-violet-100 text-violet-700",
     },
     status: {
-      "To Do": "bg-blue-100 text-blue-700",
+      "Not Started": "bg-slate-100 text-slate-700",
       "In Progress": "bg-indigo-100 text-indigo-700",
+      Waiting: "bg-amber-100 text-amber-700",
       Blocked: "bg-red-100 text-red-700",
       Done: "bg-emerald-100 text-emerald-700",
     },
-    category: {
-      Finance: "bg-violet-100 text-violet-700",
-      Legal: "bg-emerald-100 text-emerald-700",
-      HR: "bg-orange-100 text-orange-700",
-      Operations: "bg-sky-100 text-sky-700",
-      Product: "bg-pink-100 text-pink-700",
-    },
+    category: CATEGORY_OPTIONS.reduce((acc, category) => {
+      acc[category] = "bg-slate-100 text-slate-700";
+      return acc;
+    }, {}),
   };
 
-  return (
-    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${styles[type]?.[value] || "bg-slate-100 text-slate-700"}`}>
-      {value || "-"}
-    </span>
+  return <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${styles[type]?.[value] || "bg-slate-100 text-slate-700"}`}>{value || "-"}</span>;
+}
+
+function buildStats(items) {
+  return items.reduce(
+    (acc, item) => {
+      acc.total += 1;
+      if (item.status === "Done") acc.done += 1;
+      if (item.status === "In Progress") acc.progress += 1;
+      if (item.status === "Blocked") acc.blocked += 1;
+      if (item.priority === "High" || item.priority === "Urgent") acc.urgent += 1;
+      return acc;
+    },
+    { total: 0, done: 0, progress: 0, blocked: 0, urgent: 0 }
   );
+}
+
+function sanitizeItem(item) {
+  return {
+    title: item.title?.trim() || "",
+    owner: item.owner?.trim() || "",
+    priority: item.priority || "High",
+    status: item.status || "Not Started",
+    due_date: item.due_date || null,
+    category: item.category || "IGD",
+  };
+}
+
+function sortItems(a, b, sort) {
+  if (sort === "priority") return priorityRank(b.priority) - priorityRank(a.priority);
+  if (sort === "newest") return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  if (sort === "title") return String(a.title || "").localeCompare(String(b.title || ""));
+
+  const dateA = a.due_date ? new Date(`${a.due_date}T00:00:00`) : new Date("9999-12-31");
+  const dateB = b.due_date ? new Date(`${b.due_date}T00:00:00`) : new Date("9999-12-31");
+  return dateA - dateB;
+}
+
+function priorityRank(priority) {
+  return { Low: 1, Medium: 2, High: 3, Urgent: 4 }[priority] || 0;
 }
 
 function initials(name) {
   if (!name) return "?";
+  return name.split(" ").filter(Boolean).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+}
 
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+function isOverdue(date, status) {
+  if (!date || status === "Done") return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return new Date(`${date}T00:00:00`) < today;
 }
 
 function formatDate(date) {
   if (!date) return "No date";
-
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
     month: "short",
     day: "2-digit",
