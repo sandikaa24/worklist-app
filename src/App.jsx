@@ -57,6 +57,7 @@ const DEFAULT_FILTERS = {
 function emptyForm() {
   return {
     title: "",
+    description: "",
     owner: "",
     priority: "High",
     status: "Not Started",
@@ -72,6 +73,11 @@ export default function App() {
   const [processingId, setProcessingId] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [editingItem, setEditingItem] = useState(null);
+  const [completionItem, setCompletionItem] = useState(null);
+  const [proofFiles, setProofFiles] = useState([]);
+  const [proofPreviews, setProofPreviews] = useState([]);
+  const [completionNote, setCompletionNote] = useState("");
+  const [previewImage, setPreviewImage] = useState(null);
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState("All");
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -89,6 +95,12 @@ export default function App() {
     document.documentElement.classList.toggle("dark", darkMode);
     localStorage.setItem("worklist-theme", darkMode ? "dark" : "light");
   }, [darkMode]);
+
+  useEffect(() => {
+    return () => {
+      proofPreviews.forEach((preview) => URL.revokeObjectURL(preview));
+    };
+  }, [proofPreviews]);
 
   useEffect(() => {
     loadItems();
@@ -134,6 +146,7 @@ export default function App() {
     const result = items.filter((item) => {
       const searchable = [
         item.title,
+        item.description,
         item.owner,
         item.priority,
         item.status,
@@ -162,6 +175,127 @@ export default function App() {
       return acc;
     }, {});
   }, [filteredItems]);
+
+  function resetProofForm() {
+    proofPreviews.forEach((preview) => URL.revokeObjectURL(preview));
+    setProofFiles([]);
+    setProofPreviews([]);
+    setCompletionNote("");
+  }
+
+  function openCompletionModal(item) {
+    setCompletionItem(item);
+    resetProofForm();
+    setErrorMessage("");
+  }
+
+  function closeCompletionModal() {
+    setCompletionItem(null);
+    resetProofForm();
+  }
+
+  function handleProofFileChange(files) {
+    proofPreviews.forEach((preview) => URL.revokeObjectURL(preview));
+
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) {
+      setProofFiles([]);
+      setProofPreviews([]);
+      return;
+    }
+
+    const invalidFile = selectedFiles.find((file) => !file.type.startsWith("image/"));
+    if (invalidFile) {
+      setProofFiles([]);
+      setProofPreviews([]);
+      setErrorMessage("Semua file bukti harus berupa gambar.");
+      return;
+    }
+
+    const maxSize = 2 * 1024 * 1024;
+    const tooLargeFile = selectedFiles.find((file) => file.size > maxSize);
+    if (tooLargeFile) {
+      setProofFiles([]);
+      setProofPreviews([]);
+      setErrorMessage("Ukuran setiap foto bukti maksimal 2MB.");
+      return;
+    }
+
+    setErrorMessage("");
+    setProofFiles(selectedFiles);
+    setProofPreviews(selectedFiles.map((file) => URL.createObjectURL(file)));
+  }
+
+  async function completeWithProof(e) {
+    e.preventDefault();
+
+    if (!completionItem?.id) return;
+    if (proofFiles.length === 0) return setErrorMessage("Minimal 1 foto bukti wajib diupload sebelum item selesai.");
+
+    const previousItems = items;
+
+    setSaving(true);
+    setProcessingId(completionItem.id);
+    setErrorMessage("");
+
+    const uploadedUrls = [];
+
+    for (const file of proofFiles) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+      const extension = safeName.includes(".") ? safeName.split(".").pop() : "jpg";
+      const filePath = `proofs/${completionItem.id}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("work-proofs")
+        .upload(filePath, file, { upsert: false });
+
+      if (uploadError) {
+        console.error(uploadError.message);
+        setErrorMessage("Gagal upload foto bukti. Pastikan bucket work-proofs sudah dibuat dan policy Storage sudah benar.");
+        setSaving(false);
+        setProcessingId(null);
+        return;
+      }
+
+      const { data: publicUrlData } = supabase.storage.from("work-proofs").getPublicUrl(filePath);
+      uploadedUrls.push(publicUrlData.publicUrl);
+    }
+
+    const completion_image_url = uploadedUrls[0];
+    const completion_image_urls = uploadedUrls;
+    const completed_at = new Date().toISOString();
+    const cleanCompletionNote = completionNote.trim();
+
+    const updatePayload = {
+      status: "Done",
+      completion_image_url,
+      completion_image_urls,
+      completed_at,
+      completion_note: cleanCompletionNote,
+    };
+
+    setItems((current) =>
+      current.map((item) =>
+        item.id === completionItem.id ? { ...item, ...updatePayload } : item
+      )
+    );
+
+    const { error } = await supabase
+      .from("work_items")
+      .update(updatePayload)
+      .eq("id", completionItem.id);
+
+    if (error) {
+      console.error(error.message);
+      setItems(previousItems);
+      setErrorMessage("Foto berhasil diupload, tapi gagal menyimpan status Done. Cek kolom completion_image_url, completion_image_urls, completed_at, dan completion_note di database.");
+    } else {
+      closeCompletionModal();
+    }
+
+    setSaving(false);
+    setProcessingId(null);
+  }
 
   async function addItem(e) {
     e.preventDefault();
@@ -221,6 +355,15 @@ export default function App() {
     }
 
     setProcessingId(null);
+  }
+
+  function handleStatusChange(item, status) {
+    if (status === "Done" && !item.completion_image_url) {
+      openCompletionModal(item);
+      return;
+    }
+
+    updateItemStatus(item.id, status);
   }
 
   async function saveEdit(e) {
@@ -291,23 +434,25 @@ export default function App() {
             <KanbanBoard
               groupedItems={groupedItems}
               processingId={processingId}
-              onDone={(id) => updateItemStatus(id, "Done")}
+              onDone={openCompletionModal}
               onDelete={removeItem}
               onEdit={(item) => setEditingItem({ ...item, due_date: item.due_date || "" })}
-              onStatusChange={updateItemStatus}
+              onStatusChange={handleStatusChange}
+              onPreview={setPreviewImage}
             />
           ) : (
             <>
-              <div className="divide-y divide-slate-100 md:hidden">
+              <div className="divide-y divide-slate-100 overflow-visible md:hidden">
                 {filteredItems.map((item) => (
                   <MobileItemCard
                     key={item.id}
                     item={item}
                     processingId={processingId}
-                    onDone={(id) => updateItemStatus(id, "Done")}
+                    onDone={openCompletionModal}
                     onDelete={removeItem}
                     onEdit={(item) => setEditingItem({ ...item, due_date: item.due_date || "" })}
-                    onStatusChange={updateItemStatus}
+                    onStatusChange={handleStatusChange}
+                    onPreview={setPreviewImage}
                   />
                 ))}
               </div>
@@ -315,10 +460,11 @@ export default function App() {
               <DesktopTable
                 items={filteredItems}
                 processingId={processingId}
-                onDone={(id) => updateItemStatus(id, "Done")}
+                onDone={openCompletionModal}
                 onDelete={removeItem}
                 onEdit={(item) => setEditingItem({ ...item, due_date: item.due_date || "" })}
-                onStatusChange={updateItemStatus}
+                onStatusChange={handleStatusChange}
+                onPreview={setPreviewImage}
               />
             </>
           )}
@@ -339,6 +485,24 @@ export default function App() {
           submitText="Add Item"
           loadingText="Adding..."
         />
+      )}
+
+      {completionItem && (
+        <CompletionProofModal
+          item={completionItem}
+          files={proofFiles}
+          previews={proofPreviews}
+          note={completionNote}
+          setNote={setCompletionNote}
+          saving={saving && processingId === completionItem.id}
+          onFileChange={handleProofFileChange}
+          onSave={completeWithProof}
+          onCancel={closeCompletionModal}
+        />
+      )}
+
+      {previewImage && (
+        <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
       )}
 
       {editingItem && (
@@ -462,9 +626,9 @@ function Toolbar({ tabs, activeTab, setActiveTab, items, filters, setFilters, sh
   );
 }
 
-function DesktopTable({ items, processingId, onDone, onDelete, onEdit, onStatusChange }) {
+function DesktopTable({ items, processingId, onDone, onDelete, onEdit, onStatusChange, onPreview }) {
   return (
-    <div className="hidden overflow-x-auto md:block">
+    <div className="hidden overflow-x-auto overflow-y-visible md:block">
       <table className="w-full min-w-[980px] text-left text-sm">
         <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800 dark:text-slate-300">
           <tr>
@@ -482,7 +646,9 @@ function DesktopTable({ items, processingId, onDone, onDelete, onEdit, onStatusC
             <tr key={item.id} className="group transition hover:bg-violet-50/30 dark:hover:bg-violet-500/10">
               <td className="px-5 py-4">
                 <div className="max-w-xs truncate font-black text-slate-900 dark:text-white">{item.title}</div>
+                {item.description && <p className="mt-1 max-w-xs truncate text-xs font-medium text-slate-500 dark:text-slate-300">{item.description}</p>}
                 {isOverdue(item.due_date, item.status) && <p className="mt-1 text-xs font-bold text-red-600">Overdue</p>}
+                {getProofUrls(item).length > 0 && <ProofLink urls={getProofUrls(item)} onPreview={onPreview} note={item.completion_note} />}
               </td>
               <td className="px-5 py-4">
                 <Owner value={item.owner} />
@@ -493,7 +659,7 @@ function DesktopTable({ items, processingId, onDone, onDelete, onEdit, onStatusC
                   disabled={processingId === item.id}
                   value={item.status}
                   options={STATUS_OPTIONS}
-                  onChange={(status) => onStatusChange(item.id, status)}
+                  onChange={(status) => onStatusChange(item, status)}
                   size="sm"
                 />
               </td>
@@ -510,7 +676,7 @@ function DesktopTable({ items, processingId, onDone, onDelete, onEdit, onStatusC
   );
 }
 
-function KanbanBoard({ groupedItems, processingId, onDone, onDelete, onEdit, onStatusChange }) {
+function KanbanBoard({ groupedItems, processingId, onDone, onDelete, onEdit, onStatusChange, onPreview }) {
   return (
     <div className="grid gap-4 overflow-x-auto bg-white p-4 transition-colors dark:bg-slate-900 md:grid-cols-5 lg:p-5">
       {STATUS_OPTIONS.map((status) => (
@@ -523,6 +689,7 @@ function KanbanBoard({ groupedItems, processingId, onDone, onDelete, onEdit, onS
             {(groupedItems[status] || []).map((item) => (
               <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700 dark:bg-slate-900">
                 <h4 className="font-black text-slate-900 dark:text-white">{item.title}</h4>
+                {item.description && <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-500 dark:text-slate-300">{item.description}</p>}
                 <p className="mt-1 flex items-center gap-1 text-xs font-bold text-slate-500 dark:text-slate-300"><UserRound className="h-3.5 w-3.5" /> {item.owner || "Unassigned"}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Badge type="priority" value={item.priority} />
@@ -531,12 +698,13 @@ function KanbanBoard({ groupedItems, processingId, onDone, onDelete, onEdit, onS
                 <p className={`mt-3 flex items-center gap-1 text-xs font-black ${isOverdue(item.due_date, item.status) ? "text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-300"}`}>
                   <CalendarClock className="h-3.5 w-3.5" /> {formatDate(item.due_date)}
                 </p>
+                {getProofUrls(item).length > 0 && <ProofThumbnail urls={getProofUrls(item)} onPreview={onPreview} />}
                 <div className="mt-3">
                   <CustomSelect
                     disabled={processingId === item.id}
                     value={item.status}
                     options={STATUS_OPTIONS}
-                    onChange={(status) => onStatusChange(item.id, status)}
+                    onChange={(status) => onStatusChange(item, status)}
                   />
                 </div>
                 <RowActions item={item} processingId={processingId} onDone={onDone} onDelete={onDelete} onEdit={onEdit} compact />
@@ -549,12 +717,13 @@ function KanbanBoard({ groupedItems, processingId, onDone, onDelete, onEdit, onS
   );
 }
 
-function MobileItemCard({ item, processingId, onDone, onDelete, onEdit, onStatusChange }) {
+function MobileItemCard({ item, processingId, onDone, onDelete, onEdit, onStatusChange, onPreview }) {
   return (
     <article className="space-y-3 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate font-black text-slate-900">{item.title}</h3>
+          <h3 className="truncate font-black text-slate-900 dark:text-white">{item.title}</h3>
+          {item.description && <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-500 dark:text-slate-300">{item.description}</p>}
           <Owner value={item.owner} />
         </div>
         <RowActions item={item} processingId={processingId} onDone={onDone} onDelete={onDelete} onEdit={onEdit} compact />
@@ -565,14 +734,133 @@ function MobileItemCard({ item, processingId, onDone, onDelete, onEdit, onStatus
         <Badge type="category" value={item.category} />
       </div>
       <p className={`text-sm font-bold ${isOverdue(item.due_date, item.status) ? "text-red-600" : "text-slate-600"}`}>Due: {formatDate(item.due_date)}</p>
+      {getProofUrls(item).length > 0 && <ProofThumbnail urls={getProofUrls(item)} onPreview={onPreview} />}
       <CustomSelect
         disabled={processingId === item.id}
         value={item.status}
         options={STATUS_OPTIONS}
-        onChange={(status) => onStatusChange(item.id, status)}
+        onChange={(status) => onStatusChange(item, status)}
       />
     </article>
   );
+}
+
+function CompletionProofModal({
+  item,
+  files,
+  previews,
+  note,
+  setNote,
+  saving,
+  onFileChange,
+  onSave,
+  onCancel,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <form onSubmit={onSave} className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 sm:p-6">
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-2xl font-black text-slate-950 dark:text-white">Upload Bukti Selesai</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-300">
+              Upload foto bukti untuk menandai <span className="font-black">{item.title}</span> sebagai Done.
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} className="rounded-2xl p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800" title="Close">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <label className="block cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 p-5 text-center transition hover:border-violet-400 hover:bg-violet-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:bg-slate-800">
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => onFileChange(e.target.files)}
+          />
+          {previews.length > 0 ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {previews.map((preview, index) => (
+                <img key={preview} src={preview} alt={`Preview bukti selesai ${index + 1}`} className="h-44 w-full rounded-2xl object-cover" />
+              ))}
+            </div>
+          ) : (
+            <div className="py-8">
+              <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-violet-100 text-violet-700">
+                <Plus className="h-7 w-7" />
+              </div>
+              <p className="mt-3 font-black text-slate-900 dark:text-white">Pilih foto bukti pekerjaan</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-300">Bisa pilih lebih dari 1 foto. Maksimal 2MB per foto.</p>
+            </div>
+          )}
+        </label>
+
+        {files.length > 0 && (
+          <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+            {files.map((file) => (
+              <p key={`${file.name}-${file.size}`} className="truncate">File: {file.name}</p>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="rounded-2xl border border-slate-200 px-4 py-2.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+          <button disabled={saving || files.length === 0} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving ? "Uploading..." : "Upload & Mark Done"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ProofThumbnail({ urls, onPreview }) {
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-2">
+      {urls.slice(0, 4).map((url, index) => (
+        <button key={url} type="button" onClick={() => onPreview?.(url)} className="relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700">
+          <img src={url} alt={`Bukti pekerjaan selesai ${index + 1}`} className="h-24 w-full object-cover" />
+          {index === 3 && urls.length > 4 && (
+            <span className="absolute inset-0 grid place-items-center bg-slate-950/60 text-sm font-black text-white">+{urls.length - 4}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ProofLink({ urls, onPreview, note }) {
+  return (
+    <div className="mt-2 space-y-1">
+      <button type="button" onClick={() => onPreview?.(urls[0])} className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700 hover:bg-emerald-100">
+        📸 Proof available ({urls.length})
+      </button>
+      {note && <p className="max-w-xs truncate text-xs font-medium text-slate-500 dark:text-slate-300">Note: {note}</p>}
+    </div>
+  );
+}
+
+function ImagePreviewModal({ image, onClose }) {
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/80 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative max-h-[90vh] max-w-5xl" onClick={(e) => e.stopPropagation()}>
+        <button type="button" onClick={onClose} className="absolute -right-2 -top-2 rounded-full bg-white p-2 text-slate-900 shadow-xl">
+          <X className="h-5 w-5" />
+        </button>
+        <img src={image} alt="Preview bukti pekerjaan selesai" className="max-h-[90vh] rounded-3xl object-contain shadow-2xl" />
+      </div>
+    </div>
+  );
+}
+
+function getProofUrls(item) {
+  if (Array.isArray(item.completion_image_urls) && item.completion_image_urls.length > 0) {
+    return item.completion_image_urls;
+  }
+
+  return item.completion_image_url ? [item.completion_image_url] : [];
 }
 
 function ItemModal({ title, subtitle, item, setItem, saving, onSave, onCancel, submitText, loadingText }) {
@@ -591,6 +879,7 @@ function ItemModal({ title, subtitle, item, setItem, saving, onSave, onCancel, s
 
         <div className="grid gap-3 sm:grid-cols-2">
           <FloatingInput label="Title" value={item.title || ""} onChange={(e) => setItem({ ...item, title: e.target.value })} />
+          <FloatingTextarea label="Deskripsi Pekerjaan" value={item.description || ""} onChange={(e) => setItem({ ...item, description: e.target.value })} />
           <FloatingInput label="Owner" value={item.owner || ""} onChange={(e) => setItem({ ...item, owner: e.target.value })} />
           <FloatingSelect label="Priority" value={item.priority || "High"} options={PRIORITY_OPTIONS} onChange={(e) => setItem({ ...item, priority: e.target.value })} />
           <FloatingSelect label="Status" value={item.status || "Not Started"} options={STATUS_OPTIONS} onChange={(e) => setItem({ ...item, status: e.target.value })} />
@@ -613,7 +902,7 @@ function ItemModal({ title, subtitle, item, setItem, saving, onSave, onCancel, s
 function RowActions({ item, processingId, onDone, onDelete, onEdit, compact = false }) {
   return (
     <div className={`flex justify-end gap-1 ${compact ? "mt-3" : "opacity-100 transition md:opacity-70 md:group-hover:opacity-100"}`}>
-      <IconButton disabled={processingId === item.id || item.status === "Done"} onClick={() => onDone(item.id)} title="Mark as done" tone="emerald" icon={CheckCircle2} />
+      <IconButton disabled={processingId === item.id || item.status === "Done"} onClick={() => onDone(item)} title="Upload proof and mark as done" tone="emerald" icon={CheckCircle2} />
       <IconButton disabled={processingId === item.id} onClick={() => onEdit(item)} title="Edit" tone="slate" icon={Pencil} />
       <IconButton disabled={processingId === item.id} onClick={() => onDelete(item.id)} title="Delete" tone="red" icon={Trash2} />
     </div>
@@ -691,6 +980,23 @@ function Footer({ filteredCount, totalCount }) {
         <span className="font-semibold text-emerald-600">Realtime enabled</span>
         <span className="text-xs font-black uppercase tracking-wide text-violet-600">Author by Sandika</span>
       </div>
+    </div>
+  );
+}
+
+function FloatingTextarea({ label, value, onChange }) {
+  return (
+    <div className="relative sm:col-span-2">
+      <textarea
+        value={value}
+        onChange={onChange}
+        placeholder=" "
+        rows={3}
+        className="peer w-full resize-none rounded-2xl border border-slate-200 px-3 pb-2 pt-5 text-sm outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+      />
+      <label className="absolute left-3 top-1 text-xs text-slate-500 transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-sm peer-placeholder-shown:text-slate-400 peer-focus:top-1 peer-focus:text-xs peer-focus:text-violet-600 dark:text-slate-300 dark:peer-placeholder-shown:text-slate-400 dark:peer-focus:text-violet-300">
+        {label}
+      </label>
     </div>
   );
 }
@@ -796,7 +1102,7 @@ function CustomSelect({ value, options, onChange, disabled = false, size = "md",
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 max-h-64 min-w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-2xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40">
+        <div className="fixed left-4 right-4 z-[9999] mt-2 max-h-[60vh] overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-2xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40 sm:absolute sm:left-auto sm:right-0 sm:min-w-full">
           {normalizedOptions.map((option) => {
             const active = option.value === value;
             return (
@@ -874,6 +1180,7 @@ function buildStats(items) {
 function sanitizeItem(item) {
   return {
     title: item.title?.trim() || "",
+    description: item.description?.trim() || "",
     owner: item.owner?.trim() || "",
     priority: item.priority || "High",
     status: item.status || "Not Started",
