@@ -393,7 +393,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-950 transition-colors dark:bg-slate-950 dark:text-white">
-      <main className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+      <main className="mx-auto max-w-7xl space-y-6 p-4 pb-24 sm:p-6">
           <HeroHeader
             query={query}
             setQuery={setQuery}
@@ -757,8 +757,8 @@ function CompletionProofModal({
   onCancel,
 }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
-      <form onSubmit={onSave} className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 sm:p-6">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-sm">
+      <form onSubmit={onSave} className="mx-auto my-6 max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 sm:p-6">
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-slate-950 dark:text-white">Upload Bukti Selesai</h2>
@@ -804,7 +804,7 @@ function CompletionProofModal({
           </div>
         )}
 
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="sticky bottom-0 -mx-5 mt-4 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-900 sm:-mx-6 sm:px-6">
           <button type="button" onClick={onCancel} className="rounded-2xl border border-slate-200 px-4 py-2.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
           <button disabled={saving || files.length === 0} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -865,8 +865,8 @@ function getProofUrls(item) {
 
 function ItemModal({ title, subtitle, item, setItem, saving, onSave, onCancel, submitText, loadingText }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
-      <form onSubmit={onSave} className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 sm:p-6">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-sm">
+      <form onSubmit={onSave} className="mx-auto my-6 max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 sm:p-6">
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-slate-950 dark:text-white">{title}</h2>
@@ -887,7 +887,7 @@ function ItemModal({ title, subtitle, item, setItem, saving, onSave, onCancel, s
           <FloatingInput type="date" label="Deadline" value={item.due_date || ""} onChange={(e) => setItem({ ...item, due_date: e.target.value })} />
         </div>
 
-        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <div className="sticky bottom-0 -mx-5 mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-900 sm:flex-row sm:justify-end sm:-mx-6 sm:px-6">
           <button type="button" onClick={onCancel} className="rounded-2xl border border-slate-200 px-4 py-2.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
           <button disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-violet-600 px-4 py-2.5 font-black text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60">
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -1052,6 +1052,7 @@ function SelectPill({ icon: Icon, value, onChange, options }) {
 
 function CustomSelect({ value, options, onChange, disabled = false, size = "md", icon: Icon, fullWidth = false }) {
   const [open, setOpen] = useState(false);
+  const [dropdownStyle, setDropdownStyle] = useState({});
   const wrapperRef = useRef(null);
 
   const normalizedOptions = options.map((option) =>
@@ -1059,7 +1060,30 @@ function CustomSelect({ value, options, onChange, disabled = false, size = "md",
   );
   const selected = normalizedOptions.find((option) => option.value === value) || normalizedOptions[0];
 
+  function updateDropdownPosition() {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const maxHeight = Math.max(180, Math.min(260, spaceBelow > 180 ? spaceBelow : rect.top - 12));
+    const openUp = spaceBelow < 180 && rect.top > spaceBelow;
+
+    setDropdownStyle({
+      position: "fixed",
+      left: `${Math.max(12, rect.left)}px`,
+      top: openUp ? "auto" : `${rect.bottom + 8}px`,
+      bottom: openUp ? `${window.innerHeight - rect.top + 8}px` : "auto",
+      width: `${rect.width}px`,
+      maxHeight: `${maxHeight}px`,
+      zIndex: 99999,
+    });
+  }
+
   useEffect(() => {
+    if (!open) return;
+
+    updateDropdownPosition();
+
     function handleClickOutside(event) {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
         setOpen(false);
@@ -1070,14 +1094,22 @@ function CustomSelect({ value, options, onChange, disabled = false, size = "md",
       if (event.key === "Escape") setOpen(false);
     }
 
+    function handleReposition() {
+      updateDropdownPosition();
+    }
+
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleEscape);
+    window.addEventListener("scroll", handleReposition, true);
+    window.addEventListener("resize", handleReposition);
 
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleEscape);
+      window.removeEventListener("scroll", handleReposition, true);
+      window.removeEventListener("resize", handleReposition);
     };
-  }, []);
+  }, [open]);
 
   const sizeClass =
     size === "sm"
@@ -1102,7 +1134,10 @@ function CustomSelect({ value, options, onChange, disabled = false, size = "md",
       </button>
 
       {open && (
-        <div className="fixed left-4 right-4 z-[9999] mt-2 max-h-[60vh] overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-2xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40 sm:absolute sm:left-auto sm:right-0 sm:min-w-full">
+        <div
+          style={dropdownStyle}
+          className="overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-2xl shadow-slate-950/10 dark:border-slate-700 dark:bg-slate-900 dark:shadow-black/40"
+        >
           {normalizedOptions.map((option) => {
             const active = option.value === value;
             return (
